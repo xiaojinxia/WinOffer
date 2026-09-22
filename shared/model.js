@@ -44,15 +44,20 @@ export function validUrl(value, label = '链接') {
 }
 function validId(value) { requireValue(typeof value === 'string' && /^[\w-]{1,80}$/.test(value), '记录或节点标识无效'); return value; }
 function timestamp(value) { requireValue(typeof value === 'string' && /^\d{4}-\d{2}-\d{2}T/.test(value) && Number.isFinite(Date.parse(value)), '记录时间无效'); return value; }
+export function nodeSchedule(node) {
+  // Read older backups without losing a deadline or mixing times from different dates.
+  if (node?.date) return { date: node.date, time: node.time || '' };
+  return { date: node?.deadline || '', time: node?.deadline ? node.deadlineTime || '' : '' };
+}
 export function validateNode(input) {
   requireValue(input && typeof input === 'object' && !Array.isArray(input), '流程节点格式无效');
   requireValue(input.key === null || (Number.isInteger(input.key) && input.key >= 0 && input.key < STAGES.length), '标准阶段标识无效');
   requireValue(Object.hasOwn(STATES, input.status), '节点状态无效');
   const node = { id: validId(input.id), key: input.key, name: text(input.name, '节点名称', 40, true), status: input.status };
   if (node.key === 3 && node.name === '技术笔试') node.name = STAGES[3];
-  for (const field of ['date', 'deadline', 'completedDate']) node[field] = validDate(input[field] ?? '', { date: '安排日期', deadline: '截止日期', completedDate: '完成日期' }[field]);
+  for (const field of ['date', 'deadline', 'completedDate']) node[field] = validDate(input[field] ?? '', { date: '安排/截止日期', deadline: '截止日期', completedDate: '完成日期' }[field]);
   for (const field of ['time', 'deadlineTime']) node[field] = validTime(input[field] ?? '', field === 'time' ? '安排时间' : '截止时间');
-  requireValue(!node.time || node.date, '填写具体时间时，请同时填写安排日期');
+  requireValue(!node.time || node.date, '填写具体时间时，请同时填写安排/截止日期');
   requireValue(!node.deadlineTime || node.deadline, '填写截止时间时，请同时填写截止日期');
   node.location = text(input.location ?? '', '地点', 300);
   node.meetingUrl = validUrl(input.meetingUrl ?? '', '会议链接');
@@ -149,7 +154,8 @@ export function info(record) {
   const current = record.nodes[lastIndex];
   if (current && current.status !== 'passed') {
     const title = current.key === 0 && current.status === 'waiting' ? '已投递 · 等待筛选' : `${current.name}${STATES[current.status]}`;
-    return { kind: 'active', title, detail: current.date ? `${current.date} ${current.time}`.trim() : current.status === 'waiting' ? '等待招聘团队反馈' : '完成后更新进度', node: current };
+    const schedule = nodeSchedule(current);
+    return { kind: 'active', title, detail: schedule.date ? `${schedule.date} ${schedule.time}`.trim() : current.status === 'waiting' ? '等待招聘团队反馈' : '完成后更新进度', node: current };
   }
   const next = record.nodes.slice(lastIndex + 1).find(n => n.status !== 'skipped');
   return { kind: 'active', title: current ? `${current.name}已通过` : next ? '准备进入流程' : '所有阶段均已跳过', detail: next ? `等待${next.name}${next.key === 0 ? '' : '安排'}` : '等待最终反馈', node: next || current || null };
@@ -163,7 +169,29 @@ export function hasPendingTask(record) {
 export function pendingTaskKind(record) {
   if (!hasPendingTask(record)) return null;
   const key = info(record).node.key;
-  return key === 1 ? 'assessment' : key === 3 ? 'written' : INTERVIEW_KEYS.includes(key) ? 'interview' : null;
+  return key === 1 ? 'assessment' : key === 3 ? 'written' : key === 2 || INTERVIEW_KEYS.includes(key) ? 'interview' : null;
+}
+function latestNodeDistance(record, now) {
+  // Follow the actual workflow, including dates entered before choosing a status.
+  // Do not fall back to an earlier node when the latest node has no date.
+  const node = record.nodes.findLast(n => n.status !== 'skipped' && (n.status !== 'idle' || nodeSchedule(n).date));
+  const schedule = nodeSchedule(node);
+  if (!schedule.date) return Infinity;
+  const start = new Date(`${schedule.date}T${schedule.time || '00:00'}`).getTime();
+  if (!Number.isFinite(start)) return Infinity;
+  if (schedule.time) return Math.abs(start - now);
+  // A date without a time represents the whole local day, so today stays nearest.
+  const end = new Date(start);
+  end.setDate(end.getDate() + 1);
+  return Math.max(start - now, now - (end.getTime() - 1), 0);
+}
+export function sortApplications(records, sort = 'node-time', now = Date.now()) {
+  if (sort === 'node-time') {
+    return records.map(record => ({ record, distance: latestNodeDistance(record, now) }))
+      .sort((a,b) => a.distance - b.distance || b.record.updated.localeCompare(a.record.updated))
+      .map(({ record }) => record);
+  }
+  return [...records].sort((a,b) => sort === 'company' ? a.company.localeCompare(b.company, 'zh-CN') : sort === 'applied' ? b.applied.localeCompare(a.applied) : b.updated.localeCompare(a.updated));
 }
 export function standard(record) { return record.nodes.every((n,i) => n.key !== null && (i === 0 || STAGE_ORDER.indexOf(n.key) > STAGE_ORDER.indexOf(record.nodes[i - 1].key))); }
 export const AUTO_SCREENING_NOTE = '后续节点已有进度，投递简历自动标记为已通过';

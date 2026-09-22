@@ -17,15 +17,17 @@ test('HR 面位于三面与 Offer 之间，面试统计和待办区分完成前�
   assert.equal(info(node(hr,7,'passed')).kind,'offer');
 });
 
-test('三个快捷筛选只匹配当前待完成阶段，面试含一二三面与 HR 面',()=>{
-  for(const [key,kind] of [[1,'assessment'],[3,'written'],[4,'interview'],[5,'interview'],[6,'interview'],[8,'interview']]){
+test('三个快捷筛选只匹配当前待完成阶段，面试含 AI 面、一二三面与 HR 面',()=>{
+  for(const [key,kind] of [[1,'assessment'],[2,'interview'],[3,'written'],[4,'interview'],[5,'interview'],[6,'interview'],[8,'interview']]){
     for(const status of ['scheduled','active'])assert.equal(pendingTaskKind(node(fresh(),key,status)),kind);
     for(const status of ['idle','waiting','passed','failed','skipped'])assert.equal(pendingTaskKind(node(fresh(),key,status)),null);
   }
-  for(const key of [0,2,7])assert.equal(pendingTaskKind(node(fresh(),key,'scheduled')),null);
+  for(const key of [0,7])assert.equal(pendingTaskKind(node(fresh(),key,'scheduled')),null);
   const stale=node(node(fresh(),1,'scheduled'),8,'waiting');
   assert.equal(pendingTaskKind(stale),null);
   assert.equal(pendingTaskKind(applyChange(node(fresh(),8,'scheduled'),{type:'end',reason:'主动放弃'})),null);
+  assert.equal(pendingTaskKind(node(node(fresh(),2,'scheduled'),3,'waiting')),null);
+  assert.equal(pendingTaskKind(applyChange(node(fresh(),2,'scheduled'),{type:'end',reason:'主动放弃'})),null);
 });
 
 test('旧流程与撤销快照升级 HR 面，原 Offer 的标识、内容和决定不变',()=>{
@@ -244,7 +246,7 @@ test('撤销移除 Offer 节点时也恢复此前的接受决定',()=>{
 test('日期精度与时间关系得到验证，非法日期不会漏到服务器错误',()=>{
   assert.equal(validDate(''),'');assert.equal(validDate('2024-02-29'),'2024-02-29');
   for(const d of ['2026-02-29','2026-13-01','2026-00-00','2026-04-31'])assert.throws(()=>validDate(d),/有效日期/);
-  assert.throws(()=>validateNode({...fresh().nodes[0],time:'12:00'}),/安排日期/);
+  assert.throws(()=>validateNode({...fresh().nodes[0],time:'12:00'}),/安排\/截止日期/);
   assert.throws(()=>validateNode({...fresh().nodes[0],deadlineTime:'12:00'}),/截止日期/);
 });
 test('链接仅允许网页地址，多城市规范化且不丢失',()=>{

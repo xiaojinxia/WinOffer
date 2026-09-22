@@ -7,7 +7,7 @@ let records=[], revision='', editorRevision='', loaded=false, busy=false, dirty=
 let stateGeneration=0;
 let searchComposing=false, searchFrame;
 let activeRecordId, workflowDraft, pendingBackup, returnFocus, toastTimer;
-const state={query:'',quick:'all',filter:'all',type:'all',city:'all',stage:'all',sort:'updated',page:1,connected:true,stale:false};
+const state={query:'',quick:'all',filter:'all',type:'all',city:'all',stage:'all',sort:'node-time',page:1,connected:true,stale:false};
 const find=id=>records.find(r=>r.id===id);
 
 class RequestError extends Error { constructor(message,status){super(message);this.status=status;} }
@@ -152,7 +152,7 @@ async function handleAction(button) {
   if(action==='clear-node-progress'){
     const form=button.closest('#node-form');
     if(!form.reportValidity())return;
-    const data={...Object.fromEntries(new FormData(form)),status:'idle'};
+    const data={...Object.fromEntries(new FormData(form)),deadline:'',deadlineTime:'',status:'idle'};
     await perform(async()=>{
       const n=r.nodes.find(n=>n.id===node);
       validateNode({...n,...data});
@@ -248,12 +248,14 @@ document.addEventListener('submit',event=>{
         const response=await request('/api/records',{method:'POST',body:JSON.stringify({revision:editorRevision,record:basics})});
         stateGeneration++;
         records.push(response.record);revision=response.revision;
-        Object.assign(state,{query:'',quick:'all',filter:'all',type:'all',city:'all',stage:'all',sort:'updated',page:1});render({resetTableScroll:true});
+        Object.assign(state,{query:'',quick:'all',filter:'all',type:'all',city:'all',stage:'all',sort:'node-time',page:1});render({resetTableScroll:true});
       }
       dirty=false;close(true);notify(id?'投递信息已保存':'投递已保存，祝你收获好消息');
     }
     if(form.id==='node-form'){
       const n=find(id).nodes.find(n=>n.id===form.dataset.node);
+      // The single date/time pair replaces either legacy date field, including when cleared.
+      Object.assign(data,{deadline:'',deadlineTime:''});
       validateNode({...n,...data});
       await change(id,{type:'node',nodeId:n.id,data});close(true);notify(`${n.name}进度已保存`);
     }
