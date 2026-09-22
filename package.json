@@ -1,0 +1,13 @@
+{
+  "name": "winoffer",
+  "version": "1.0.0",
+  "private": true,
+  "type": "module",
+  "engines": { "node": ">=24.14.0 <25" },
+  "scripts": {
+    "dev": "node server/index.js",
+    "start": "node server/index.js --open",
+    "test": "node --test test/*.test.js",
+    "check": "node --check public/app.js && node --check public/views.js && node --check shared/model.js && node --check server/http.js && node --check server/store.js && node --check server/index.js"
+  }
+}
