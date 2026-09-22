@@ -1,4 +1,7 @@
-export const STAGES = ['投递简历', '测评', 'AI 面试', '笔试', '一面', '二面', '三面', 'Offer'];
+// Stage keys are persisted in records and backups; keep Offer at key 7.
+export const STAGES = ['投递简历', '测评', 'AI 面试', '笔试', '一面', '二面', '三面', 'Offer', 'HR 面'];
+export const STAGE_ORDER = [0, 1, 2, 3, 4, 5, 6, 8, 7];
+const INTERVIEW_KEYS = [4, 5, 6, 8];
 export const NODE_STATES = { scheduled: '待完成', waiting: '待结果', passed: '已通过', failed: '未通过', skipped: '已跳过' };
 // Keep unset nodes and legacy in-progress values readable in existing records and backups.
 export const STATES = { idle: '未开始', ...NODE_STATES, active: NODE_STATES.scheduled };
@@ -81,13 +84,33 @@ export function validateBasics(input) {
   return result;
 }
 export function defaultNodes() {
-  return STAGES.map((name,key) => ({ id: `stage-${key}`, key, name, status: key === 0 ? 'waiting' : 'idle', date: '', time: '', deadline: '', deadlineTime: '', completedDate: '', location: '', meetingUrl: '', notes: '' }));
+  return STAGE_ORDER.map(key => ({ id: `stage-${key}`, key, name: STAGES[key], status: key === 0 ? 'waiting' : 'idle', date: '', time: '', deadline: '', deadlineTime: '', completedDate: '', location: '', meetingUrl: '', notes: '' }));
 }
 export function createApplication(input, id, now = new Date().toISOString()) {
-  return { id: validId(id), ...validateBasics(input), created: now, updated: now, ended: false, endReason: '', offerDecision: 'pending', nodes: defaultNodes(), history: [] };
+  return { id: validId(id), ...validateBasics(input), workflowVersion: 2, created: now, updated: now, ended: false, endReason: '', offerDecision: 'pending', nodes: defaultNodes(), history: [] };
+}
+export function upgradeHrWorkflow(record) {
+  if (record.workflowVersion === 2) return record;
+  const upgrade = nodes => {
+    if (nodes.some(n => n.key === 8)) return nodes;
+    const existing = nodes.find(n => n.key === null && /^hr\s*面$/i.test(n.name));
+    if (existing) return nodes.map(n => n === existing ? { ...n, key: 8, name: STAGES[8] } : n);
+    // Preserve full custom workflows without exceeding the existing node limit.
+    if (nodes.length >= 64) return nodes;
+    const offer = nodes.findIndex(n => n.key === 7);
+    const lastInterview = nodes.findLastIndex(n => INTERVIEW_KEYS.includes(n.key));
+    const index = offer >= 0 ? offer : lastInterview >= 0 ? lastInterview + 1 : nodes.length;
+    let id = 'stage-8';
+    while (nodes.some(n => n.id === id)) id += '-hr';
+    const status = nodes.slice(index).some(n => n.status !== 'idle') ? 'skipped' : 'idle';
+    const hr = { ...defaultNodes().find(n => n.key === 8), id, status };
+    return [...nodes.slice(0, index), hr, ...nodes.slice(index)];
+  };
+  return { ...record, workflowVersion: 2, nodes: upgrade(record.nodes), history: record.history.map(h => h.beforeNodes ? { ...h, beforeNodes: upgrade(h.beforeNodes) } : h) };
 }
 export function validateApplication(input) {
   requireValue(input && typeof input === 'object', '投递记录格式无效');
+  requireValue(input.workflowVersion === undefined || [1, 2].includes(input.workflowVersion), '招聘流程版本无效');
   requireValue(typeof input.ended === 'boolean', '投递结束状态无效');
   requireValue(['pending','accepted','declined'].includes(input.offerDecision), 'Offer 接受状态无效');
   const nodes = validateNodes(input.nodes);
@@ -105,7 +128,7 @@ export function validateApplication(input) {
     }
     return entry;
   });
-  return { id: validId(input.id), ...validateBasics(input), created: timestamp(input.created), updated: timestamp(input.updated), ended: input.ended, endReason, offerDecision: input.offerDecision, nodes, history };
+  return upgradeHrWorkflow({ id: validId(input.id), ...validateBasics(input), workflowVersion: input.workflowVersion ?? 1, created: timestamp(input.created), updated: timestamp(input.updated), ended: input.ended, endReason, offerDecision: input.offerDecision, nodes, history });
 }
 export function validateBackup(input) {
   requireValue(input?.format === 'winoffer-backup' && input.version === BACKUP_VERSION, '这不是受支持的 WinOffer 备份文件（需要版本 1）');
@@ -131,13 +154,18 @@ export function info(record) {
   const next = record.nodes.slice(lastIndex + 1).find(n => n.status !== 'skipped');
   return { kind: 'active', title: current ? `${current.name}已通过` : next ? '准备进入流程' : '所有阶段均已跳过', detail: next ? `等待${next.name}${next.key === 0 ? '' : '安排'}` : '等待最终反馈', node: next || current || null };
 }
-export function inInterview(record) { const state = info(record); return state.kind === 'active' && state.node?.key >= 4 && state.node?.key < 7; }
+export function inInterview(record) { const state = info(record); return state.kind === 'active' && INTERVIEW_KEYS.includes(state.node?.key); }
 export function hasPendingTask(record) {
   const state = info(record);
   // Earlier scheduled nodes may be stale once the application has moved to a later stage.
-  return state.kind === 'active' && ['scheduled','active'].includes(state.node?.status) && state.node.key >= 1 && state.node.key <= 6;
+  return state.kind === 'active' && ['scheduled','active'].includes(state.node?.status) && [1, 2, 3, ...INTERVIEW_KEYS].includes(state.node.key);
 }
-export function standard(record) { return record.nodes.every((n,i) => n.key !== null && (i === 0 || n.key > record.nodes[i - 1].key)); }
+export function pendingTaskKind(record) {
+  if (!hasPendingTask(record)) return null;
+  const key = info(record).node.key;
+  return key === 1 ? 'assessment' : key === 3 ? 'written' : INTERVIEW_KEYS.includes(key) ? 'interview' : null;
+}
+export function standard(record) { return record.nodes.every((n,i) => n.key !== null && (i === 0 || STAGE_ORDER.indexOf(n.key) > STAGE_ORDER.indexOf(record.nodes[i - 1].key))); }
 export const AUTO_SCREENING_NOTE = '后续节点已有进度，投递简历自动标记为已通过';
 export function advanceResumeScreening(record) {
   const index = record.nodes.findIndex(n => n.key === 0);

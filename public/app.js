@@ -7,7 +7,7 @@ let records=[], revision='', editorRevision='', loaded=false, busy=false, dirty=
 let stateGeneration=0;
 let searchComposing=false, searchFrame;
 let activeRecordId, workflowDraft, pendingBackup, returnFocus, toastTimer;
-const state={query:'',filter:'all',type:'all',city:'all',stage:'all',sort:'updated',page:1,connected:true,stale:false};
+const state={query:'',quick:'all',filter:'all',type:'all',city:'all',stage:'all',sort:'updated',page:1,connected:true,stale:false};
 const find=id=>records.find(r=>r.id===id);
 
 class RequestError extends Error { constructor(message,status){super(message);this.status=status;} }
@@ -121,9 +121,10 @@ async function handleAction(button) {
   const {action,id,value,node,index}=button.dataset,r=find(id);
   if(action==='reload') {if(dialog.open&&!close())return;await perform(loadRecords);return;}
   if(action==='close'){close();return;}
-  if(action==='filter'){state.filter=value;state.page=1;render({resetTableScroll:true});return;}
+  if(action==='filter'){state.filter=value;state.quick='all';state.page=1;render({resetTableScroll:true});return;}
+  if(action==='quick-filter'){state.quick=state.quick===value?'all':value;state.filter='all';state.stage='all';state.page=1;render({resetTableScroll:true});app.querySelector(`[data-action="quick-filter"][data-value="${value}"]`)?.focus({preventScroll:true});return;}
   if(action==='type'){state.type=value;state.page=1;render({resetTableScroll:true});return;}
-  if(action==='clear'){Object.assign(state,{query:'',filter:'all',type:'all',city:'all',stage:'all',page:1});render({resetTableScroll:true});return;}
+  if(action==='clear'){Object.assign(state,{query:'',quick:'all',filter:'all',type:'all',city:'all',stage:'all',page:1});render({resetTableScroll:true});return;}
   if(action==='page'){
     const page=Number(value);if(!Number.isInteger(page)||page===state.page)return;
     state.page=page;render({resetTableScroll:true});return;
@@ -188,7 +189,7 @@ async function handleAction(button) {
       const data=await request('/api/restore',{method:'POST',body:JSON.stringify({revision:editorRevision,backup:pendingBackup})});
       stateGeneration++;
       records=data.records;revision=data.revision;state.stale=false;
-      Object.assign(state,{query:'',filter:'all',type:'all',city:'all',stage:'all',page:1});render({resetTableScroll:true});close(true);
+      Object.assign(state,{query:'',quick:'all',filter:'all',type:'all',city:'all',stage:'all',page:1});render({resetTableScroll:true});close(true);
       notify(`已恢复 ${records.length} 条投递，恢复前的数据已自动备份`);
     });
   }
@@ -247,7 +248,7 @@ document.addEventListener('submit',event=>{
         const response=await request('/api/records',{method:'POST',body:JSON.stringify({revision:editorRevision,record:basics})});
         stateGeneration++;
         records.push(response.record);revision=response.revision;
-        Object.assign(state,{query:'',filter:'all',type:'all',city:'all',stage:'all',sort:'updated',page:1});render({resetTableScroll:true});
+        Object.assign(state,{query:'',quick:'all',filter:'all',type:'all',city:'all',stage:'all',sort:'updated',page:1});render({resetTableScroll:true});
       }
       dirty=false;close(true);notify(id?'投递信息已保存':'投递已保存，祝你收获好消息');
     }

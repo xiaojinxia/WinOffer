@@ -4,7 +4,7 @@ import { dirname, join } from 'node:path';
 import { randomUUID } from 'node:crypto';
 import { AppError, BACKUP_VERSION, createApplication, applyChange, validateApplication, validateBackup, advanceResumeScreening, AUTO_SCREENING_NOTE } from '../shared/model.js';
 
-const safetyBackupPattern = /^before-(?:restore|screening)-[\w.-]+\.json$/;
+const safetyBackupPattern = /^before-(?:restore|screening|hr-stage)-[\w.-]+\.json$/;
 function normalizeScreening(record) {
   const next = advanceResumeScreening(record);
   if (next === record) return record;
@@ -26,7 +26,7 @@ export class Store {
       PRAGMA user_version=1;
     `);
     this.db.prepare('INSERT OR IGNORE INTO metadata(key, value) VALUES (?, ?)').run('revision', randomUUID());
-    try { this.migrateResumeScreening(); }
+    try { this.migrateHrStage(); this.migrateResumeScreening(); }
     catch (error) { this.db.close(); throw error; }
   }
   revision() { return this.db.prepare("SELECT value FROM metadata WHERE key='revision'").get().value; }
@@ -62,6 +62,17 @@ export class Store {
       const safetyBackup = this.saveSafetyBackup(before.records, 'screening');
       const update = this.db.prepare('UPDATE applications SET document=? WHERE id=?');
       for (const { next } of changes) update.run(JSON.stringify(next), next.id);
+      return { count: changes.length, safetyBackup };
+    });
+  }
+  migrateHrStage() {
+    const before = this.snapshot();
+    const changes = before.records.filter(record => record.workflowVersion !== 2).map(validateApplication);
+    if (!changes.length) return;
+    return this.transaction(before.revision, () => {
+      const safetyBackup = this.saveSafetyBackup(before.records, 'hr-stage');
+      const update = this.db.prepare('UPDATE applications SET document=? WHERE id=?');
+      for (const record of changes) update.run(JSON.stringify(record), record.id);
       return { count: changes.length, safetyBackup };
     });
   }
@@ -105,7 +116,7 @@ export class Store {
     });
   }
   backups() {
-    try { return readdirSync(this.backupDirectory).filter(n => safetyBackupPattern.test(n)).sort((a,b) => b.replace(/^before-(?:restore|screening)-/, '').localeCompare(a.replace(/^before-(?:restore|screening)-/, ''))); }
+    try { return readdirSync(this.backupDirectory).filter(n => safetyBackupPattern.test(n)).sort((a,b) => b.replace(/^before-(?:restore|screening|hr-stage)-/, '').localeCompare(a.replace(/^before-(?:restore|screening|hr-stage)-/, ''))); }
     catch (error) { if (error.code === 'ENOENT') return []; throw error; }
   }
   readBackup(name) {

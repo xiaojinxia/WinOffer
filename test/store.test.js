@@ -4,11 +4,44 @@ import { readFileSync, writeFileSync } from 'node:fs';
 import { join } from 'node:path';
 import { fixture, basics } from './helpers.js';
 
+test('已有投递启动时补上 HR 面并备份原始数据，重启不重复，手动移除后保持移除',t=>{
+  const f=fixture(t);let s=f.open();
+  const legacy=s.create(basics,s.revision()).record;delete legacy.workflowVersion;
+  legacy.nodes=legacy.nodes.filter(n=>n.key!==8);
+  s.db.prepare('UPDATE applications SET document=? WHERE id=?').run(JSON.stringify(legacy),legacy.id);
+  const before=s.snapshot();s.close();s=f.open();
+  const after=s.snapshot(),record=after.records[0];
+  assert.deepEqual(record.nodes.slice(-3).map(n=>n.name),['三面','HR 面','Offer']);
+  assert.deepEqual(record.nodes.filter(n=>n.key!==8),legacy.nodes);
+  assert.equal(record.updated,legacy.updated);assert.deepEqual(record.history,legacy.history);
+  assert.notEqual(after.revision,before.revision);
+  const files=s.backups();assert.equal(files.length,1);assert.match(files[0],/^before-hr-stage-/);
+  assert.deepEqual(JSON.parse(readFileSync(join(f.directory,'backups',files[0]),'utf8')).records,before.records);
+  s.close();s=f.open();assert.deepEqual(s.snapshot(),after);assert.deepEqual(s.backups(),files);
+  const removed=s.change(record.id,{type:'workflow',nodes:record.nodes.filter(n=>n.key!==8)},s.revision());
+  s.close();s=f.open();assert.deepEqual(s.records(),[removed.record]);
+  assert.deepEqual(s.restore(s.export(),s.revision()).records,[removed.record]);
+  const restored=s.restore(s.readBackup(files[0]),s.revision());
+  assert.equal(restored.records[0].nodes.filter(n=>n.key===8).length,1);
+});
+
+test('补上 HR 面时备份或数据库写入失败，记录和修订版本保持原样',t=>{
+  for(const failure of ['backup','write']){
+    const f=fixture(t),s=f.open(),legacy=s.create(basics,s.revision()).record;
+    delete legacy.workflowVersion;legacy.nodes=legacy.nodes.filter(n=>n.key!==8);
+    s.db.prepare('UPDATE applications SET document=? WHERE id=?').run(JSON.stringify(legacy),legacy.id);
+    const before=s.snapshot();
+    if(failure==='backup')writeFileSync(join(f.directory,'backups'),'blocked');
+    else s.db.exec("CREATE TRIGGER reject_hr_update BEFORE UPDATE ON applications BEGIN SELECT RAISE(ABORT, 'simulated failure'); END;");
+    assert.throws(()=>s.migrateHrStage());assert.deepEqual(s.snapshot(),before);
+  }
+});
+
 test('关闭数据库再打开，记录、节点和操作历史完整保留',t=>{
   const f=fixture(t);let store=f.open();
   const created=store.create(basics,store.snapshot().revision);
   const saved=store.change(created.record.id,{type:'node',nodeId:'stage-4',data:{status:'scheduled',date:'2026-09-25',time:'14:30',notes:'项目与系统设计',deadline:'2026-09-24',deadlineTime:'18:00',meetingUrl:'https://example.com/meeting'}},created.revision);
-  assert.deepEqual(saved.record.nodes.map(n=>n.status),['passed','skipped','skipped','skipped','scheduled','idle','idle','idle']);
+  assert.deepEqual(saved.record.nodes.map(n=>n.status),['passed','skipped','skipped','skipped','scheduled','idle','idle','idle','idle']);
   assert.equal(saved.record.history.length,created.record.history.length+1);
   assert.match(saved.record.history.at(-1).text,/前面 3 个未开始节点自动标记为已跳过/);
   store.close();store=f.open();assert.deepEqual(store.snapshot().records,[saved.record]);
@@ -143,5 +176,5 @@ test('约 100 条记录及较长流程可以完整保存和导出',t=>{
   assert.equal(s.export().records.length,100);
   const a=s.snapshot().records[0];
   const nodes=[...a.nodes,...Array.from({length:24},(_,i)=>({...a.nodes[0],id:`extra-${i}`,key:null,name:`自定义面试 ${i}`,status:'idle'}))];
-  s.change(a.id,{type:'workflow',nodes},revision);assert.equal(s.snapshot().records.find(r=>r.id===a.id).nodes.length,32);
+  s.change(a.id,{type:'workflow',nodes},revision);assert.equal(s.snapshot().records.find(r=>r.id===a.id).nodes.length,33);
 });

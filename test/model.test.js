@@ -1,20 +1,74 @@
 import test from 'node:test';
 import assert from 'node:assert/strict';
-import { createApplication, applyChange, info, hasPendingTask, standard, validateNode, validateBackup, validDate, validUrl, splitCities, advanceResumeScreening } from '../shared/model.js';
+import { createApplication, applyChange, info, STAGE_ORDER, inInterview, pendingTaskKind, validateApplication, hasPendingTask, standard, validateNode, validateBackup, validDate, validUrl, splitCities, advanceResumeScreening } from '../shared/model.js';
 
 const basics={company:'示例公司',role:'后端开发',type:'私企',city:'合肥、南京'};
 const fresh=()=>createApplication(basics,'application-1','2026-09-21T00:00:00.000Z');
 const node=(r,key,status)=>applyChange(r,{type:'node',nodeId:`stage-${key}`,data:{status}});
 
-test('待完成包含六个标准阶段的待完成状态，不要求填写日期，并兼容旧进行中记录',()=>{
-  for(const key of [1,2,3,4,5,6]){
+test('HR 面位于三面与 Offer 之间，面试统计和待办区分完成前后',()=>{
+  assert.deepEqual(fresh().nodes.slice(-3).map(n=>n.name),['三面','HR 面','Offer']);
+  assert.equal(standard(fresh()),true);
+  assert.equal(info(node(fresh(),6,'passed')).detail,'等待HR 面安排');
+  const hr=node(fresh(),8,'scheduled');
+  assert.equal(inInterview(hr),true);assert.equal(hasPendingTask(hr),true);
+  assert.equal(pendingTaskKind(hr),'interview');
+  assert.equal(info(node(hr,8,'passed')).detail,'等待Offer安排');
+  assert.equal(info(node(hr,7,'passed')).kind,'offer');
+});
+
+test('三个快捷筛选只匹配当前待完成阶段，面试含一二三面与 HR 面',()=>{
+  for(const [key,kind] of [[1,'assessment'],[3,'written'],[4,'interview'],[5,'interview'],[6,'interview'],[8,'interview']]){
+    for(const status of ['scheduled','active'])assert.equal(pendingTaskKind(node(fresh(),key,status)),kind);
+    for(const status of ['idle','waiting','passed','failed','skipped'])assert.equal(pendingTaskKind(node(fresh(),key,status)),null);
+  }
+  for(const key of [0,2,7])assert.equal(pendingTaskKind(node(fresh(),key,'scheduled')),null);
+  const stale=node(node(fresh(),1,'scheduled'),8,'waiting');
+  assert.equal(pendingTaskKind(stale),null);
+  assert.equal(pendingTaskKind(applyChange(node(fresh(),8,'scheduled'),{type:'end',reason:'主动放弃'})),null);
+});
+
+test('旧流程与撤销快照升级 HR 面，原 Offer 的标识、内容和决定不变',()=>{
+  const legacy=node(fresh(),7,'passed');delete legacy.workflowVersion;
+  legacy.nodes=legacy.nodes.filter(n=>n.key!==8);legacy.offerDecision='accepted';
+  Object.assign(legacy.nodes.at(-1),{id:'old-offer',notes:'保留薪资沟通',date:'2026-09-22'});
+  legacy.history.push({time:legacy.updated,type:'workflow',text:'调整流程',beforeNodes:structuredClone(legacy.nodes),beforeOfferDecision:'accepted'});
+  const original=structuredClone(legacy),upgraded=validateApplication(legacy);
+  assert.deepEqual(legacy,original);assert.deepEqual(upgraded.nodes.filter(n=>n.key!==8),legacy.nodes);
+  assert.equal(upgraded.nodes.at(-2).status,'skipped');assert.equal(upgraded.offerDecision,'accepted');
+  assert.equal(upgraded.updated,legacy.updated);assert.equal(info(upgraded).title,'已接受 Offer');
+  assert.deepEqual(validateApplication(upgraded),upgraded);
+  assert.deepEqual(applyChange(upgraded,{type:'undo-workflow'}).nodes,upgraded.nodes);
+});
+
+test('旧自定义 HR 面保留内容并纳入标准面试，用户移除后不会再次补回',()=>{
+  const legacy=fresh();delete legacy.workflowVersion;
+  const hr=legacy.nodes.find(n=>n.key===8);Object.assign(hr,{id:'custom-hr',key:null,name:'hr面',status:'scheduled',notes:'沟通薪资'});
+  const upgraded=validateApplication(legacy),converted=upgraded.nodes.find(n=>n.key===8);
+  assert.equal(upgraded.nodes.length,legacy.nodes.length);
+  assert.equal(converted.id,'custom-hr');assert.equal(converted.notes,'沟通薪资');assert.equal(pendingTaskKind(upgraded),'interview');
+  const removed=applyChange(upgraded,{type:'workflow',nodes:upgraded.nodes.filter(n=>n.key!==8)});
+  assert.equal(validateApplication(removed).nodes.some(n=>n.key===8),false);
+  assert.equal(applyChange(removed,{type:'undo-workflow'}).nodes.find(n=>n.key===8).id,'custom-hr');
+});
+
+test('升级 HR 面避免节点标识冲突并保留已达 64 节点的自定义流程',()=>{
+  const legacy=fresh();delete legacy.workflowVersion;legacy.nodes=legacy.nodes.filter(n=>n.key!==8);
+  legacy.nodes.push({...legacy.nodes[0],id:'stage-8',key:null,name:'沟通',status:'idle'});
+  assert.equal(validateApplication(legacy).nodes.find(n=>n.key===8).id,'stage-8-hr');
+  while(legacy.nodes.length<64)legacy.nodes.push({...legacy.nodes[0],id:`custom-${legacy.nodes.length}`,key:null,name:'加面',status:'idle'});
+  assert.deepEqual(validateApplication(legacy).nodes,legacy.nodes);
+});
+
+test('待完成包含七个标准阶段的待完成状态，不要求填写日期，并兼容旧进行中记录',()=>{
+  for(const key of [1,2,3,4,5,6,8]){
     const r=node(fresh(),key,'scheduled');
     assert.equal(hasPendingTask(r),true,info(r).title);
-    assert.equal(info(r).title,`${r.nodes[key].name}待完成`);
+    assert.equal(info(r).title,`${r.nodes.find(n=>n.key===key).name}待完成`);
     const legacy=node(r,key,'active');
     assert.equal(hasPendingTask(legacy),true);assert.equal(info(legacy).title,info(r).title);
     for(const status of ['idle','waiting','passed','failed','skipped']){
-      assert.equal(hasPendingTask(node(r,key,status)),false,`${r.nodes[key].name} ${status}`);
+      assert.equal(hasPendingTask(node(r,key,status)),false,`${r.nodes.find(n=>n.key===key).name} ${status}`);
     }
   }
 });
@@ -52,13 +106,13 @@ test('面试完成待结果与已通过等待下一轮使用不同摘要，补�
 });
 
 test('后续各阶段有状态时简历自动通过、前面空白节点自动跳过，不补填日期或修改后续节点',()=>{
-  for(const key of [1,2,3,4,5,6,7]){
+  for(const key of STAGE_ORDER.slice(1)){
     for(const status of ['scheduled','active','waiting','passed','failed','skipped']){
       const original=fresh(),result=node(original,key,status);
       assert.equal(result.nodes[0].status,'passed',`${key} ${status}`);
       assert.equal(result.nodes[0].completedDate,'');
       assert.equal(original.nodes[0].status,'waiting');
-      for(const other of original.nodes.filter(n=>n.key!==0&&n.key!==key))assert.deepEqual(result.nodes.find(n=>n.id===other.id),other.key<key?{...other,status:'skipped'}:other);
+      for(const other of original.nodes.filter(n=>n.key!==0&&n.key!==key))assert.deepEqual(result.nodes.find(n=>n.id===other.id),STAGE_ORDER.indexOf(other.key)<STAGE_ORDER.indexOf(key)?{...other,status:'skipped'}:other);
       assert.deepEqual(original.nodes,fresh().nodes);
       assert.equal(result.history.length,original.history.length+1);
       assert.match(result.history.at(-1).text,/投递简历自动标记为已通过/);
@@ -92,9 +146,9 @@ test('自动跳过只填空白状态，保留此前明确填写的结果、安�
 
 test('自动跳过按调整后的实际顺序处理标准和自定义节点，并允许手动纠正',()=>{
   const original=fresh(),custom={...original.nodes[1],id:'custom',key:null,name:'HR 沟通'};
-  original.nodes=[original.nodes[0],original.nodes[4],custom,original.nodes[2],original.nodes[1],original.nodes[3],original.nodes[5],original.nodes[6],original.nodes[7]];
+  original.nodes=[original.nodes[0],original.nodes[4],custom,original.nodes[2],original.nodes[1],original.nodes[3],original.nodes[5],original.nodes[6],...original.nodes.slice(7)];
   const result=node(original,2,'scheduled');
-  assert.deepEqual(result.nodes.map(n=>n.status),['passed','skipped','skipped','scheduled','idle','idle','idle','idle','idle']);
+  assert.deepEqual(result.nodes.map(n=>n.status),['passed','skipped','skipped','scheduled','idle','idle','idle','idle','idle','idle']);
   const corrected=applyChange(result,{type:'node',nodeId:'custom',data:{status:'passed',notes:'补录结果'}});
   assert.equal(corrected.nodes[2].status,'passed');assert.equal(corrected.nodes[2].notes,'补录结果');
   assert.deepEqual(corrected.nodes.slice(3),result.nodes.slice(3));
@@ -110,7 +164,7 @@ test('补存已有进度时补齐前面空白节点，修改未开始节点或�
   const basicsChanged=applyChange(original,{type:'basics',data:{...original,company:'更新公司'}});
   assert.deepEqual(basicsChanged.nodes,original.nodes);
   const workflowChanged=applyChange(original,{type:'workflow',nodes:original.nodes.filter(n=>n.key!==7)});
-  assert.deepEqual(workflowChanged.nodes,original.nodes.slice(0,7));
+  assert.deepEqual(workflowChanged.nodes,original.nodes.filter(n=>n.key!==7));
   assert.deepEqual(applyChange(workflowChanged,{type:'undo-workflow'}).nodes,original.nodes);
 });
 
@@ -134,7 +188,7 @@ test('清除误填的后续节点后回到测评待结果，保留时间备注�
       assert.deepEqual(cleared.nodes[key],{...before.nodes[key],status:'idle'});
       for(const other of before.nodes.filter(n=>n.key!==key))assert.deepEqual(cleared.nodes.find(n=>n.id===other.id),other);
     }
-    assert.deepEqual(cleared.nodes.map(n=>n.status),['passed','waiting','idle','idle','idle','idle','idle','idle']);
+    assert.deepEqual(cleared.nodes.map(n=>n.status),['passed','waiting','idle','idle','idle','idle','idle','idle','idle']);
     assert.equal(info(cleared).title,'测评待结果');assert.equal(hasPendingTask(cleared),false);
     assert.equal(cleared.history.length,original.history.length+2);
   }
@@ -173,7 +227,7 @@ test('调整流程保留删除前的状态和备注，可以完整撤销',()=>{
   let r=applyChange(fresh(),{type:'node',nodeId:'stage-4',data:{status:'passed',notes:'保留面试复盘',date:'2026-09-20'}});
   const before=structuredClone(r.nodes);
   r=applyChange(r,{type:'workflow',nodes:r.nodes.filter(n=>n.key!==4)});
-  assert.equal(r.nodes.length,7);assert.equal(standard(r),true);
+  assert.equal(r.nodes.length,8);assert.equal(standard(r),true);
   r=applyChange(r,{type:'undo-workflow'});assert.deepEqual(r.nodes,before);
   assert.throws(()=>applyChange(r,{type:'undo-workflow'}),/最近一次/);
 });
