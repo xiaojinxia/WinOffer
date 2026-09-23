@@ -7,6 +7,7 @@ let records=[], revision='', editorRevision='', loaded=false, busy=false, dirty=
 let stateGeneration=0;
 let searchComposing=false, searchFrame;
 let activeRecordId, workflowDraft, pendingBackup, returnFocus, toastTimer;
+const wheelPaging={lastEvent:-Infinity,lastPage:-Infinity,direction:0,distance:0,turned:false};
 const state={query:'',quick:'all',filter:'all',type:'all',city:'all',stage:'all',sort:'node-time',page:1,connected:true,stale:false};
 const find=id=>records.find(r=>r.id===id);
 
@@ -197,6 +198,30 @@ async function handleAction(button) {
 document.addEventListener('click',event=>{
   const button=event.target.closest('[data-action]');if(button)handleAction(button).catch(showError);
 });
+app.addEventListener('wheel',event=>{
+  const table=event.target.closest('.table-scroll');
+  if(!table||!loaded||busy||dialog.open||searchComposing||searchFrame!==undefined||event.defaultPrevented)return;
+  // Leave browser zoom, horizontal scrolling and modified gestures to the browser.
+  if(event.ctrlKey||event.metaKey||event.altKey||event.shiftKey||!event.deltaY||Math.abs(event.deltaX)>=Math.abs(event.deltaY))return;
+  const now=performance.now(),direction=Math.sign(event.deltaY);
+  if(now-wheelPaging.lastEvent>200||direction!==wheelPaging.direction){
+    wheelPaging.distance=0;wheelPaging.turned=false;
+  }
+  wheelPaging.lastEvent=now;wheelPaging.direction=direction;
+  // Keep one gesture (including touchpad inertia) from skipping several pages.
+  if(wheelPaging.turned||now-wheelPaging.lastPage<450){wheelPaging.turned=true;event.preventDefault();return;}
+  const canScroll=direction>0?table.scrollTop+table.clientHeight<table.scrollHeight-1:table.scrollTop>1;
+  if(canScroll){wheelPaging.distance=0;return;}
+  const button=app.querySelector(`[data-page-control="${direction>0?'next':'previous'}"]`);
+  if(!button||button.disabled){wheelPaging.distance=0;return;}
+  event.preventDefault();
+  const unit=event.deltaMode===1?16:event.deltaMode===2?table.clientHeight:1;
+  wheelPaging.distance+=Math.abs(event.deltaY)*unit;
+  if(wheelPaging.distance<40)return;
+  wheelPaging.turned=true;wheelPaging.lastPage=now;wheelPaging.distance=0;
+  handleAction(button).catch(showError);
+},{passive:false});
+
 document.addEventListener('compositionstart',event=>{
   if(event.target.id!=='search')return;
   searchComposing=true;
