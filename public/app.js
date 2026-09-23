@@ -7,7 +7,8 @@ let records=[], revision='', editorRevision='', loaded=false, busy=false, dirty=
 let stateGeneration=0;
 let searchComposing=false, searchFrame;
 let activeRecordId, workflowDraft, pendingBackup, returnFocus, toastTimer;
-const wheelPaging={lastEvent:-Infinity,lastPage:-Infinity,direction:0,distance:0,turned:false};
+let listData, listFrame, recordHeight=70;
+const listResizeObserver=new ResizeObserver(()=>resizeList());
 const state={query:'',quick:'all',filter:'all',type:'all',city:'all',stage:'all',sort:'node-time',page:1,connected:true,stale:false};
 const find=id=>records.find(r=>r.id===id);
 
@@ -27,16 +28,50 @@ function render({resetTableScroll=false}={}) {
   if(!loaded||searchComposing||searchFrame!==undefined) return;
   const focused=document.activeElement?.id, input=document.querySelector('#search');
   const selection=focused==='search'?[input.selectionStart,input.selectionEnd]:null;
-  const previousTable=app.querySelector('.table-scroll'),tablePosition={top:previousTable?.scrollTop||0,left:previousTable?.scrollLeft||0};
-  const pageControl=document.activeElement?.dataset.pageControl,pagination=view.paginatedRecords(records,state);
-  const pageChanged=Number(app.querySelector('.pagination [aria-current="page"]')?.dataset.value)!==pagination.page;
-  state.page=pagination.page;
-  app.innerHTML=view.workspace(records,state,pagination);
-  const table=app.querySelector('.table-scroll');
-  if(table){table.scrollLeft=tablePosition.left;table.scrollTop=resetTableScroll||pageChanged?0:tablePosition.top;}
+  const previousTable=app.querySelector('.table-scroll'),tablePosition={row:(previousTable?.scrollTop||0)/recordHeight,left:previousTable?.scrollLeft||0};
+  const pageControl=document.activeElement?.dataset.pageControl;
+  listResizeObserver.disconnect();
+  listData=view.listRecords(records,state);state.page=listData.page;
+  app.innerHTML=view.workspace(records,state,listData);
   if(state.stale) app.querySelector('main').insertAdjacentHTML('afterbegin','<div class="connection-alert" role="alert">其他页面已更新记录。<button data-action="reload">重新加载最新记录</button></div>');
+  const table=app.querySelector('.table-scroll');
+  if(table){
+    measureRows(table);table.scrollLeft=tablePosition.left;table.scrollTop=resetTableScroll?0:tablePosition.row*recordHeight;
+    syncListPosition();listResizeObserver.observe(table);
+  }
   if(selection){const next=document.querySelector('#search');next.focus({preventScroll:true});next.setSelectionRange(...selection);}
-  else if(pageControl){const next=[...app.querySelectorAll('[data-page-control]')].find(el=>el.dataset.pageControl===pageControl&&!el.disabled)||app.querySelector('.pagination [aria-current="page"]');next?.focus({preventScroll:true});}
+  else if(pageControl)restorePageFocus(pageControl);
+}
+function restorePageFocus(key) {
+  const next=[...app.querySelectorAll('[data-page-control]')].find(el=>el.dataset.pageControl===key&&!el.disabled)||app.querySelector('.pagination [aria-current="page"]');
+  next?.focus({preventScroll:true});
+}
+function measureRows(table) {
+  const available=table.clientHeight-table.querySelector('.table-head').offsetHeight;
+  table.style.setProperty('--record-height',`${Math.max(70,Math.floor(available/listData.size*64)/64)}px`);
+  recordHeight=parseFloat(getComputedStyle(table.querySelector('.application-row')).height);
+}
+function resizeList() {
+  const table=app.querySelector('.table-scroll');if(!table)return;
+  const row=table.scrollTop/recordHeight;
+  measureRows(table);table.scrollTop=row*recordHeight;syncListPosition();
+}
+function syncListPosition() {
+  const table=app.querySelector('.table-scroll');if(!table||!listData?.total)return;
+  // Allow for independently rounded viewport and content heights at CSS zoom.
+  const first=Math.min(listData.total-1,Math.max(0,Math.floor((table.scrollTop+2)/recordHeight)));
+  const visibleHeight=Math.max(0,table.clientHeight-table.querySelector('.table-head').offsetHeight);
+  listData.start=first+1;listData.end=Math.min(listData.total,Math.max(first+1,Math.ceil((table.scrollTop+visibleHeight-.5)/recordHeight)));
+  const page=Math.floor(first/listData.size)+1;
+  if(page!==state.page){
+    const focused=document.activeElement?.dataset.pageControl;
+    state.page=page;listData.page=page;
+    app.querySelector('.pagination').outerHTML=view.paginationControls(listData);
+    app.querySelector('.pagination-summary').textContent=view.paginationSummary(listData);
+    if(focused)restorePageFocus(focused);
+  }
+  const range=app.querySelector('.page-range'),text=view.recordRange(listData,records.length);
+  if(range.textContent!==text)range.textContent=text;
 }
 function updateSearch(input) {
   state.query=input.value;state.page=1;
@@ -127,8 +162,9 @@ async function handleAction(button) {
   if(action==='type'){state.type=value;state.page=1;render({resetTableScroll:true});return;}
   if(action==='clear'){Object.assign(state,{query:'',quick:'all',filter:'all',type:'all',city:'all',stage:'all',page:1});render({resetTableScroll:true});return;}
   if(action==='page'){
-    const page=Number(value);if(!Number.isInteger(page)||page===state.page)return;
-    state.page=page;render({resetTableScroll:true});return;
+    const page=Number(value),table=app.querySelector('.table-scroll');
+    if(!table||!Number.isInteger(page)||page<1||page>listData.pages)return;
+    table.scrollTo({top:(page-1)*listData.size*recordHeight,behavior:matchMedia('(prefers-reduced-motion: reduce)').matches?'instant':'smooth'});return;
   }
   if(action==='new'){open(view.recordForm());return;}
   if(action==='help'){open(view.help(),{modal:true});return;}
@@ -198,29 +234,11 @@ async function handleAction(button) {
 document.addEventListener('click',event=>{
   const button=event.target.closest('[data-action]');if(button)handleAction(button).catch(showError);
 });
-app.addEventListener('wheel',event=>{
-  const table=event.target.closest('.table-scroll');
-  if(!table||!loaded||busy||dialog.open||searchComposing||searchFrame!==undefined||event.defaultPrevented)return;
-  // Leave browser zoom, horizontal scrolling and modified gestures to the browser.
-  if(event.ctrlKey||event.metaKey||event.altKey||event.shiftKey||!event.deltaY||Math.abs(event.deltaX)>=Math.abs(event.deltaY))return;
-  const now=performance.now(),direction=Math.sign(event.deltaY);
-  if(now-wheelPaging.lastEvent>200||direction!==wheelPaging.direction){
-    wheelPaging.distance=0;wheelPaging.turned=false;
-  }
-  wheelPaging.lastEvent=now;wheelPaging.direction=direction;
-  // Keep one gesture (including touchpad inertia) from skipping several pages.
-  if(wheelPaging.turned||now-wheelPaging.lastPage<450){wheelPaging.turned=true;event.preventDefault();return;}
-  const canScroll=direction>0?table.scrollTop+table.clientHeight<table.scrollHeight-1:table.scrollTop>1;
-  if(canScroll){wheelPaging.distance=0;return;}
-  const button=app.querySelector(`[data-page-control="${direction>0?'next':'previous'}"]`);
-  if(!button||button.disabled){wheelPaging.distance=0;return;}
-  event.preventDefault();
-  const unit=event.deltaMode===1?16:event.deltaMode===2?table.clientHeight:1;
-  wheelPaging.distance+=Math.abs(event.deltaY)*unit;
-  if(wheelPaging.distance<40)return;
-  wheelPaging.turned=true;wheelPaging.lastPage=now;wheelPaging.distance=0;
-  handleAction(button).catch(showError);
-},{passive:false});
+app.addEventListener('scroll',event=>{
+  if(!event.target.matches('.table-scroll')||listFrame!==undefined)return;
+  // Update only the footer; keep the records and native scrolling uninterrupted.
+  listFrame=requestAnimationFrame(()=>{listFrame=undefined;syncListPosition();});
+},{capture:true,passive:true});
 
 document.addEventListener('compositionstart',event=>{
   if(event.target.id!=='search')return;

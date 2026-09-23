@@ -114,11 +114,14 @@ input::placeholder, textarea::placeholder { color: #a2a8b1; }
 .records-panel { display: flex; flex-direction: column; flex: 1; min-height: 0; }
 .records-panel > .list-footer { flex-shrink: 0; }
 .records-panel > .empty-state { flex: 1; min-height: 0; overflow: auto; align-self: center; }
-.table-scroll { flex: 1; min-height: 0; overflow: auto; overscroll-behavior: contain; }
-.table-scroll::-webkit-scrollbar { width: 0; height: 10px; }
-.table-scroll::-webkit-scrollbar-track { background: #f7f4f1; }
-.table-scroll::-webkit-scrollbar-thumb { background: #c8ae9e; border: 2px solid #f7f4f1; border-radius: 6px; }
-.timeline-table { min-width: 995px; height: 100%; min-height: calc(43px + var(--page-size) * 70px); display: grid; grid-template-rows: 43px repeat(var(--page-size), minmax(70px, 1fr)); }
+.table-scroll { flex: 1; min-height: 0; overflow: auto; overscroll-behavior: contain; overflow-anchor: none; scroll-padding-top: 43px; scrollbar-gutter: stable; scrollbar-width: thin; scrollbar-color: #d8dce2 #fafbfc; }
+.table-scroll:hover, .table-scroll:focus-within { scrollbar-color: #b5a296 #fafbfc; }
+.table-scroll::-webkit-scrollbar { width: 8px; height: 8px; }
+.table-scroll::-webkit-scrollbar-track { background: #fafbfc; }
+.table-scroll::-webkit-scrollbar-thumb { background: #d8dce2; border: 2px solid #fafbfc; border-radius: 6px; }
+.table-scroll:hover::-webkit-scrollbar-thumb { background: #b5a296; }
+.timeline-table { min-width: 995px; min-height: 100%; }
+.list-tail { height: calc(var(--trailing-rows) * var(--record-height, 70px)); }
 .table-head, .application-row { display: grid; grid-template-columns: 226px minmax(556px, 1fr) 156px 39px; align-items: center; }
 .table-head { position: sticky; top: 0; z-index: 4; height: 43px; background: #fafbfc; border-top: 1px solid #f0f2f4; border-bottom: 1px solid #f0f2f4; box-shadow: 0 2px 5px #20324608; font-size: 10px; color: #939aa5; }
 .table-head > span:first-child { padding-left: 23px; }
@@ -126,7 +129,7 @@ input::placeholder, textarea::placeholder { color: #a2a8b1; }
 .stage-headings span { display: flex; align-items: center; justify-content: center; gap: 3px; white-space: nowrap; }
 .stage-headings .icon { width: 12px; height: 12px; color: #ab9d8f; }
 .table-head > span:nth-last-child(2) { padding-left: 24px; }
-.application-row { min-height: 0; position: relative; border-bottom: 1px solid #f0f1f4; transition: background var(--dur); }
+.application-row { height: var(--record-height, 70px); min-height: 70px; position: relative; border-bottom: 1px solid #f0f1f4; transition: background var(--dur); }
 .application-row > .company-block { padding-top: 3px; padding-bottom: 3px; }
 .application-row:last-child { border-bottom: 0; }
 .application-row:hover { background: #fffdfa; }
