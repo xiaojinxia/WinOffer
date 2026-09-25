@@ -210,7 +210,11 @@ export function applyChange(record, change, now = new Date().toISOString()) {
       const index = next.nodes.findIndex(n => n.id === change.nodeId);
       requireValue(index >= 0, '找不到该流程节点，请重新打开投递');
       const previous = next.nodes[index];
-      const node = validateNode({ ...previous, ...change.data, id: previous.id, key: previous.key, name: previous.name });
+      const data = { ...previous, ...change.data, id: previous.id, key: previous.key, name: previous.name };
+      if (['scheduled', 'active'].includes(previous.status) && !['scheduled', 'active'].includes(data.status)) {
+        Object.assign(data, { date: '', time: '', deadline: '', deadlineTime: '' });
+      }
+      const node = validateNode(data);
       next.nodes[index] = node;
       message = previous.status === node.status ? `更新了${node.name}的时间与备注` : `${node.name}：${STATES[previous.status]} → ${STATES[node.status]}`;
       if (node.status !== 'idle') {

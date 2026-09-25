@@ -179,7 +179,7 @@ test('自动筛选按实际流程支持自定义后续节点，流程撤销可�
   const noResume={...r,nodes:[custom]};assert.equal(advanceResumeScreening(noResume),noResume);
 });
 
-test('清除误填的后续节点后回到测评待结果，保留时间备注，任意清除顺序均不会重新跳过',()=>{
+test('清除误填的后续节点后回到测评待结果，待完成日期清空且备注保留，任意清除顺序均不会重新跳过',()=>{
   let original=node(fresh(),1,'waiting');
   original=applyChange(original,{type:'node',nodeId:'stage-2',data:{status:'scheduled',date:'2026-09-25',time:'10:00',notes:'准备事项'}});
   original=node(original,3,'passed');
@@ -187,7 +187,7 @@ test('清除误填的后续节点后回到测评待结果，保留时间备注�
     let cleared=original;
     for(const key of order){
       const before=cleared;cleared=node(cleared,key,'idle');
-      assert.deepEqual(cleared.nodes[key],{...before.nodes[key],status:'idle'});
+      assert.deepEqual(cleared.nodes[key],{...before.nodes[key],status:'idle',...(key===2?{date:'',time:''}:{})});
       for(const other of before.nodes.filter(n=>n.key!==key))assert.deepEqual(cleared.nodes.find(n=>n.id===other.id),other);
     }
     assert.deepEqual(cleared.nodes.map(n=>n.status),['passed','waiting','idle','idle','idle','idle','idle','idle','idle']);

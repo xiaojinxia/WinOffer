@@ -2,21 +2,25 @@ import { createServer } from 'node:http';
 import { readFile } from 'node:fs/promises';
 import { fileURLToPath } from 'node:url';
 import { AppError, validateBackup } from '../shared/model.js';
+import { AgentService } from './agent/service.js';
+import { agentRoute } from './agent/routes.js';
 
 const assets = new Map([
   ['/', new URL('../public/index.html', import.meta.url)],
+  ['/agent', new URL('../public/agent.html', import.meta.url)],
+  ...['agent.js','agent.css'].map(name=>[`/${name}`,new URL(`../public/${name}`,import.meta.url)]),
   ...['app.js','views.js','icons.js','styles.css','mark.svg'].map(name => [`/${name}`, new URL(`../public/${name}`, import.meta.url)]),
   ['/model.js', new URL('../shared/model.js', import.meta.url)],
 ]);
 const types = { html: 'text/html; charset=utf-8', js: 'text/javascript; charset=utf-8', css: 'text/css; charset=utf-8', svg: 'image/svg+xml' };
 const MAX_BODY = 64 * 1024 * 1024;
 function json(res, value, status = 200, headers = {}) { res.writeHead(status, { 'Content-Type': 'application/json; charset=utf-8', ...headers }); res.end(JSON.stringify(value)); }
-async function body(req) {
+async function body(req, max = MAX_BODY) {
   if (!req.headers['content-type']?.toLowerCase().startsWith('application/json')) throw new AppError('请使用 JSON 格式提交', 415);
   const chunks = []; let size = 0;
   for await (const chunk of req) {
     size += chunk.length;
-    if (size > MAX_BODY) throw new AppError('文件过大，最多支持 64 MB', 413);
+    if (size > max) throw new AppError('提交内容过大', 413);
     chunks.push(chunk);
   }
   let value;
@@ -25,8 +29,9 @@ async function body(req) {
   if (!value || typeof value !== 'object' || Array.isArray(value)) throw new AppError('提交内容应为 JSON 对象');
   return value;
 }
-export function createAppServer(store) {
-  return createServer(async (req,res) => {
+export function createAppServer(store, agentOptions) {
+  const agent = new AgentService(store, agentOptions);
+  const server = createServer(async (req,res) => {
     res.setHeader('Cache-Control', 'no-store');
     res.setHeader('X-Content-Type-Options', 'nosniff');
     res.setHeader('Referrer-Policy', 'no-referrer');
@@ -37,6 +42,10 @@ export function createAppServer(store) {
       if (req.headers.origin && req.headers.origin !== `http://${host}`) throw new AppError('不允许跨站访问本地数据', 403);
       if (req.headers['sec-fetch-site'] === 'cross-site') throw new AppError('不允许跨站访问本地数据', 403);
       const path = new URL(req.url, `http://${host}`).pathname;
+      if(path.startsWith('/api/agent/')) {
+        const result=await agentRoute(agent,req,new URL(req.url,`http://${host}`),body);
+        return json(res,result,result?.task?202:200);
+      }
       if (path === '/api/health' && req.method === 'GET') return json(res, { app: 'winoffer', version: '1.0.0' });
       if (path === '/api/state' && req.method === 'GET') return json(res, store.snapshot());
       if (path === '/api/records' && req.method === 'POST') { const data = await body(req); return json(res, store.create(data.record, data.revision), 201); }
@@ -66,4 +75,7 @@ export function createAppServer(store) {
       else res.end();
     }
   });
+  server.agent=agent;
+  server.on('close',()=>agent.close());
+  return server;
 }

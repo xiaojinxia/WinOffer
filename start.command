@@ -15,6 +15,9 @@ if ! node -e 'const [major, minor] = process.versions.node.split(".").map(Number
   exit 1
 fi
 
+if [ ! -f node_modules/imapflow/package.json ]; then
+  npm ci || exit 1
+fi
 node server/index.js --open
 winoffer_status=$?
 if [ "$winoffer_status" -ne 0 ]; then

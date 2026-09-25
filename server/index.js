@@ -1,10 +1,12 @@
 import { resolve } from 'node:path';
 import { fileURLToPath } from 'node:url';
 import { spawn } from 'node:child_process';
+import { loadEnvFile } from 'node:process';
 import { Store } from './store.js';
 import { createAppServer } from './http.js';
 
 const root = fileURLToPath(new URL('../', import.meta.url));
+try { loadEnvFile(resolve(root,'.env.local')); } catch(error) { if(error.code!=='ENOENT')throw error; }
 const port = Number(process.env.PORT || 4173);
 if (!Number.isInteger(port) || port < 1 || port > 65535) throw new Error('PORT 必须是 1 至 65535 的整数');
 const dataDirectory = process.env.WINOFFER_DATA_DIR ? resolve(process.env.WINOFFER_DATA_DIR) : resolve(root, 'data');
@@ -36,7 +38,8 @@ let stopping = false;
 function stop() {
   if (stopping) return;
   stopping = true;
-  server.close(() => { store.close(); process.exit(0); });
+  server.agent.close();
+  server.close(async () => { await server.agent.settled(); store.close(); process.exit(0); });
   server.closeIdleConnections();
 }
 process.on('SIGINT', stop);

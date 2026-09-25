@@ -56,12 +56,12 @@ test('自动跳过与当前节点在同一事务保存，写入失败时全部�
   assert.deepEqual(s.snapshot(),before);
 });
 
-test('清除节点进度后重新打开及导出仍为空白状态，原时间和备注保留',t=>{
+test('清除待完成节点进度后重新打开及导出仍为空白状态，日期清空且备注保留',t=>{
   const f=fixture(t);let s=f.open();
   const created=s.create(basics,s.revision());
   const scheduled=s.change(created.record.id,{type:'node',nodeId:'stage-2',data:{status:'scheduled',date:'2026-09-25',notes:'保留准备记录'}},created.revision);
   const cleared=s.change(created.record.id,{type:'node',nodeId:'stage-2',data:{status:'idle'}},scheduled.revision);
-  assert.deepEqual(cleared.record.nodes[2],{...scheduled.record.nodes[2],status:'idle'});
+  assert.deepEqual(cleared.record.nodes[2],{...scheduled.record.nodes[2],status:'idle',date:''});
   s.close();s=f.open();assert.deepEqual(s.records(),[cleared.record]);
   assert.deepEqual(s.export().records,[cleared.record]);
 });

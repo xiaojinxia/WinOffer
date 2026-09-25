@@ -2,6 +2,7 @@ import { DatabaseSync } from 'node:sqlite';
 import { mkdirSync, writeFileSync, readdirSync, readFileSync } from 'node:fs';
 import { dirname, join } from 'node:path';
 import { randomUUID } from 'node:crypto';
+import { migrateAgent } from './agent/schema.js';
 import { AppError, BACKUP_VERSION, createApplication, applyChange, validateApplication, validateBackup, advanceResumeScreening, AUTO_SCREENING_NOTE } from '../shared/model.js';
 
 const safetyBackupPattern = /^before-(?:restore|screening|hr-stage)-[\w.-]+\.json$/;
@@ -19,11 +20,12 @@ export class Store {
     this.db = new DatabaseSync(filename, { timeout: 5000 });
     this.db.exec('PRAGMA journal_mode=WAL; PRAGMA synchronous=FULL; PRAGMA foreign_keys=ON;');
     const version = this.db.prepare('PRAGMA user_version').get().user_version;
-    if (version > 1) { this.db.close(); throw new Error('数据库版本高于当前程序，请使用新版 WinOffer 打开。'); }
+    if (version > 2) { this.db.close(); throw new Error('数据库版本高于当前程序，请使用新版 WinOffer 打开。'); }
+    try { migrateAgent(this.db, this.backupDirectory, version); }
+    catch (error) { this.db.close(); throw error; }
     this.db.exec(`
       CREATE TABLE IF NOT EXISTS metadata (key TEXT PRIMARY KEY, value TEXT NOT NULL) STRICT;
       CREATE TABLE IF NOT EXISTS applications (id TEXT PRIMARY KEY, document TEXT NOT NULL CHECK(json_valid(document))) STRICT;
-      PRAGMA user_version=1;
     `);
     this.db.prepare('INSERT OR IGNORE INTO metadata(key, value) VALUES (?, ?)').run('revision', randomUUID());
     try { this.migrateHrStage(); this.migrateResumeScreening(); }
@@ -46,6 +48,20 @@ export class Store {
       this.db.exec('COMMIT');
       return { ...result, revision };
     } catch (error) { this.db.exec('ROLLBACK'); throw error; }
+  }
+  atomic(action) {
+    this.db.exec('BEGIN IMMEDIATE');
+    try { const result = action(); this.db.exec('COMMIT'); return result; }
+    catch (error) { this.db.exec('ROLLBACK'); throw error; }
+  }
+  invalidateAgent(reason, applicationId) {
+    const rows = this.db.prepare("SELECT id,document FROM agent_proposals WHERE state IN ('pending','needs_input','stale')").all();
+    for (const row of rows) {
+      const proposal = JSON.parse(row.document);
+      if (applicationId && proposal.applicationId !== applicationId) continue;
+      Object.assign(proposal, { state: 'stale', reason, preview: null, version: proposal.version + 1 });
+      this.db.prepare('UPDATE agent_proposals SET state=?,document=? WHERE id=?').run('stale', JSON.stringify(proposal), row.id);
+    }
   }
   saveSafetyBackup(records, reason = 'restore') {
     const backup = { format: 'winoffer-backup', version: BACKUP_VERSION, exportedAt: new Date().toISOString(), records };
@@ -98,6 +114,7 @@ export class Store {
     return this.transaction(revision, () => {
       const result = this.db.prepare('DELETE FROM applications WHERE id=?').run(id);
       if (result.changes === 0) throw new AppError('投递记录已不存在，请重新加载列表', 404);
+      this.invalidateAgent('目标投递已删除', id);
       return { id };
     });
   }
@@ -109,6 +126,7 @@ export class Store {
     return this.transaction(revision, () => {
       // Refuse to replace data if the safety copy cannot be written and flushed.
       const safetyBackup = this.saveSafetyBackup(this.records());
+      this.invalidateAgent('投递备份已恢复，请重新核对');
       this.db.exec('DELETE FROM applications');
       const insert = this.db.prepare('INSERT INTO applications VALUES (?, ?)');
       for (const record of backup.records) insert.run(record.id, JSON.stringify(record));

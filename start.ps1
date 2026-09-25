@@ -5,4 +5,8 @@ if (-not (Get-Command node -ErrorAction SilentlyContinue)) {
     Read-Host 'Press Enter to close'
     exit 1
 }
+if (-not (Test-Path -LiteralPath 'node_modules/imapflow/package.json')) {
+    npm ci
+    if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
+}
 node server/index.js --open

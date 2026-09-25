@@ -121,7 +121,10 @@ function close(force=false) {
   return true;
 }
 function detail(r){activeRecordId=r.id;open(view.detail(r));}
-function editNode(r,id){activeRecordId=r.id;open(view.nodeForm(r,r.nodes.find(n=>n.id===id)));}
+function editNode(r,id){
+  activeRecordId=r.id;open(view.nodeForm(r,r.nodes.find(n=>n.id===id)));
+  dialog.querySelector('#node-form').dataset.status=dialog.querySelector('input[name="status"]:checked')?.value||'idle';
+}
 function editWorkflow(r,preserve=false){activeRecordId=r.id;if(!preserve)workflowDraft=structuredClone(r.nodes);const changed=dirty;open(view.workflow(r,workflowDraft));dirty=preserve?changed:false;}
 async function perform(action) {
   if(busy)return;
@@ -192,8 +195,9 @@ async function handleAction(button) {
     const data={...Object.fromEntries(new FormData(form)),deadline:'',deadlineTime:'',status:'idle'};
     await perform(async()=>{
       const n=r.nodes.find(n=>n.id===node);
+      if(form.dataset.status==='scheduled'||['scheduled','active'].includes(n.status))Object.assign(data,{date:'',time:''});
       validateNode({...n,...data});
-      await change(id,{type:'node',nodeId:node,data});close(true);notify(`${n.name}进度已清除，时间与备注已保留`);
+      await change(id,{type:'node',nodeId:node,data});close(true);notify(`${n.name}进度已清除`);
     });return;
   }
   if(action==='workflow'){editWorkflow(r);return;}
@@ -258,6 +262,13 @@ document.addEventListener('input',event=>{
   if(dialog.contains(event.target)&&event.target.closest('form')&&!event.target.closest('#add-node-form'))dirty=true;
 });
 document.addEventListener('change',event=>{
+  const nodeForm=event.target.closest('#node-form');
+  if(nodeForm&&event.target.name==='status'){
+    if(nodeForm.dataset.status==='scheduled'&&event.target.value!=='scheduled'){
+      nodeForm.elements.date.value='';nodeForm.elements.time.value='';
+    }
+    nodeForm.dataset.status=event.target.value;dirty=true;return;
+  }
   const keys={'stage-filter':'stage','type-filter':'type','city-filter':'city',sort:'sort'};
   if(keys[event.target.id]){state[keys[event.target.id]]=event.target.value;state.page=1;render({resetTableScroll:true});return;}
   if(event.target.id==='confirm-restore'){dialog.querySelector('[data-action="restore"]').disabled=!event.target.checked;return;}

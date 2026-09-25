@@ -6,5 +6,12 @@ if errorlevel 1 (
   pause
   exit /b 1
 )
+if not exist "node_modules\imapflow\package.json" (
+  call npm ci
+  if errorlevel 1 (
+    pause
+    exit /b 1
+  )
+)
 node server/index.js --open
 if errorlevel 1 pause
